@@ -198,6 +198,52 @@ view from one angle (with different digits marked in different colours).
  \includegraphics[scale=0.5]{digit_embedding.png}
 \end{center}
 
+\section{Noughts and crosses}
+
+We would like to train a neural network to play noughts and crosses
+(also known as Tick Tack Toe).  Code for this is in the file
+\texttt{ox.py} (and also the Maple worksheet \texttt{ox.mw}). 
+
+The game is played on a $3\tm 3$ board; we number the board positions
+as $0,\dotsc,8$ in the obvious way.  We have two players: player $0$
+places Os on the board and player $1$ places Xs on the board.  We
+represent the game state as an array of shape $9\tm 2$, with a $1$ at
+position $(i,j)$ if player $j$ has placed a counter at position $i$.
+There are $8$ horizontal, vertical or diagonal lines on the board,
+corresponding to the following sets of positions:
+\[ W = \{\{0,3,6\}, \{1,4,7\}, \{2,5,8\}, 
+         \{0,1,2\}, \{3,4,5\}, \{6,7,8\},
+         \{0,4,8\}, \{2,4,6\}\}.
+\]
+A player wins if they have covered at least one of these lines.
+
+We are mostly interested in game states such that
+\begin{itemize}
+ \item[(a)] The state is empty or could be reached by a legal sequence
+  of moves with the last move played by player 1.
+ \item[(b)] The game has not finished, so neither player has won, and
+  there is at least one blank spot on the board.
+\end{itemize}
+Let $X$ be the set of states of this type.  We find that $|X|=4519$.
+We want a function $F$ that accepts an element of $X$ and generates a
+probability distribution on the board positions.  Player $0$ can then
+sample randomly from that distribution to decide where to play.  This
+may result in an illegal move, where the selected position is already
+occupied; if so we declare that player $0$ has lost.
+
+There is a well-known function $F_1$ which is optimal: if a player
+uses that algorithm then they are guaranteed to win or draw.
+
+The most obvious approach is just to train a model to replicate the
+behaviour of $F_1$.  We have successfully done this, with two hidden
+layers of size $20$ between the input layer (of shape $9\times 2$) and
+the output layer (of size $9$).
+
+We have also attempted to do two different flavours of reinforcement
+learning: a policy gradient approach and a deep Q-learning approach.
+Neither has so far been successful.  It is not clear whether our
+implementation is flawed or whether our training hyperparameters are
+inappropriate.
 
 \section{Conway's Game of Life}
 
@@ -232,7 +278,7 @@ neural network, as is done in the file \texttt{life.py}.
  In other words, our output is the running total of the inputs, except
  that the total resets to zero whenever the input is zero.  This can
  be computed by a Gated Recurrent Unit network (GRU), as is done in
- \texttt{exact/rnn.py}. 
+ \texttt{rnn.py}. 
 \end{example}
 
 \section{Miscellaneous other examples}
@@ -294,13 +340,6 @@ neural network, as is done in the file \texttt{life.py}.
  $H(a.e')$ will be $1$, and $(a.e')_+-1$ will also be small, so
  $L_{,i}(a)$ will be small.  There is code for this analysis in
  \texttt{maple/train\_delta.mw}. 
-\end{example}
-
-\begin{example}\label{eg-ox}
- It should be possible to design a neural network to play noughts and
- crosses perfectly.  Wikipedia explains an algorithm for perfect play.
- There is an implementation in \texttt{maple/ox.mw}, but it is not
- immediately translatable into a neural network.
 \end{example}
 
 \begin{example}\label{eg-binary-words}
