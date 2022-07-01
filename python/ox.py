@@ -108,7 +108,7 @@ def near_wins(pq, player=0):
     return n
 
 
-# near_wins(pq, i) is the list of positions at which player i could 
+# forks(pq, i) is the list of positions at which player i could 
 # play and thereby create two near-wins.
 def forks(pq, player=0):
     f = []
@@ -252,7 +252,7 @@ make_all_states()
 #
 # In more detail, the idea is to calculate a function Q from game states
 # to vectors of length 9, with Q(pq)[i] interpreted as the expected 
-# reward if player 0 plays i in state pq.  Rewards ar +1 for a win,
+# reward if player 0 plays i in state pq.  Rewards are +1 for a win,
 # -1 for a loss, 0 for a draw and -5 for an illegal move.  The 
 # method is to train the weights to force Q to satisfy a certain 
 # consistency condition.
