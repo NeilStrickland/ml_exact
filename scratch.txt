@@ -1,1 +1,1 @@
-This is a scratch file for expermenting with version control.
+This is a scratch file for experimenting with version control.  
