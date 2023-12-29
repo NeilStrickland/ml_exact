@@ -101,7 +101,8 @@ n=3
 bool_in = list(itertools.product(*[[0,1]]*n))
 bool_funs = list(itertools.product(*[[0,1]]*(2**n)))
 
-
+# This function creates a model that evaluates all boolean functions
+# from R^n -> R^1 (i.e. where u_i's are scalar)
 def make_n_model(n):
     global n_model
     inputs = tf.keras.Input(shape=(n))
@@ -138,7 +139,7 @@ def make_n_model(n):
     n_model.layers[2].set_weights([w1.T,b1])
 
 
-make_n_model(4)
+make_n_model(3)
 
 #n_model.predict(np.array([0,1,0]).reshape(1,3),verbose=0)
 #np.shape(n_model.predict(np.array([0,1,0]).reshape(1,3),verbose=0))
@@ -158,6 +159,48 @@ def test_n_model(n):
     y_all = np.array(bool_funs).T
     n_model.evaluate(x_all, y_all)
 
-test_n_model(4)
+#test_n_model(3)
 
 # for n=5, cannot allocate weights of size 31x4294967296 (2^5, 2^2^5)
+
+
+# now try R^n -> R^m, m > 1
+# aim is to compute a single boolean function with a deeper network
+# to gain efficiency
+
+# first make a light version of the full model above that computes
+# a boolean function specified by inputs u_0 to u_2^n-1
+# same as full model but uses a single u instead of bool_funs
+def make_light_model(u):
+    global light_model
+    n = int(np.log2(u.shape[0]))
+    inputs = tf.keras.Input(shape=(n))
+    dense1 = tf.keras.layers.Dense(2**n-1, activation='relu')(inputs)
+    dense2 = tf.keras.layers.Dense(1, activation='linear')(dense1)
+    light_model = tf.keras.Model(inputs=inputs, outputs=dense2, name='light_model')
+    light_model.compile(loss='binary_crossentropy', metrics=['accuracy'])
+
+    bool_in = list(itertools.product(*[[0,1]]*n))
+
+    w0 = np.array(bool_in)[1:]
+    b0 = 1-sum(w0.T)
+    light_model.layers[1].set_weights([w0.T,b0])
+
+    w1 = np.zeros((1,2**n))
+    for j in range(2**n):
+        w1[:,j] = w1[:,j] + u[j]
+        for k in range(j):
+            if all(np.array(bool_in)[j] >= np.array(bool_in)[k]):
+                w1[:,j] = w1[:,j] - w1[:,k]
+    # drop first term u0 from the weight matrix and add it in as a bias
+    w1 = w1[:,1:]
+    b1 = np.array([u[0]])
+    light_model.layers[2].set_weights([w1.T,b1])
+
+
+u = np.array([0,1,1,0])
+make_light_model(u=u)
+light_model.predict(np.array([0,1]).reshape(1,2),verbose=0)
+
+
+# now try to improve efficiency
