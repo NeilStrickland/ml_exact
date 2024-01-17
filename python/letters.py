@@ -83,7 +83,7 @@ def explicit_model():
     global explicit_model
     inputs = tf.keras.Input(shape=(3, 3))
     reshape = tf.keras.layers.Reshape((9,))(inputs)
-    outputs = tf.keras.layers.Dense(11, activation='linear')(reshape)
+    outputs = tf.keras.layers.Dense(11, activation='relu')(reshape)
     explicit_model = tf.keras.Model(inputs=inputs, outputs=outputs, name="explicit_model")
     explicit_model.compile(loss="categorical_crossentropy", metrics=["accuracy"])
 
@@ -97,7 +97,7 @@ def explicit_model():
                    [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
                    [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
 
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
+    b0 = np.array([-2, -3, -4, -6, -7, -4, -6, -4, -6, -4, 1])
 
     explicit_model.layers[2].set_weights([w0, b0])
     return explicit_model

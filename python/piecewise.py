@@ -68,7 +68,7 @@ def make_exact_nd_model(a, m, c):
     exact_nd_model = tf.keras.Model(inputs=inputs, outputs=dense2, name='exact_nd_model')
     exact_nd_model.compile(loss='binary_crossentropy', metrics=['accuracy'])
 
-    # for multiple inputs, use block diagonal weights in first layer
+    # for multiple inputs, use block "diagonal" weights in first layer
     # to handle each input separately
     w0 = np.zeros((d,r))
     x=0

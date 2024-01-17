@@ -173,12 +173,12 @@ def state_rnn_attempt():
 
 # Start again with functions to tweak the model
 
-file_path = os.path.join(src_dir, '..\\notes\\zara.txt')
+#file_path = os.path.join(src_dir, '..\\notes\\zara.txt')
 
-with open(file_path, 'r') as file:
-    text = file.read()
+#with open(file_path, 'r') as file:
+#    text = file.read()
 
-text = 'zero anone one and zero '
+text = 'one zero anone one and zero '
 
 text_num = [ord(x) for x in list(text)]
   
@@ -282,8 +282,7 @@ def state_model(text_tensor):
 
 #state_model(text_tensor=text_reshape)
 
-# produces correct output but not working quite as intended
-# base state + o ends up putting a 1 in both 'zero' and 'o' states
+
 
 
 def full_model(text_tensor):
