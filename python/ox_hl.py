@@ -315,48 +315,7 @@ def load_model(p=20, q=20):
     return model
 
 
-# Add residual connectionsto try and help the model learn legal moves only
-def make_res_model(p=10, q=10, r=0.01):
-    global res_model
-    inputs = tf.keras.Input(shape=(9, 2))
-    reshape = tf.keras.layers.Reshape((18,))(inputs)
-    hidden0 = tf.keras.layers.Dense(p, activation='relu')(reshape)
-    hidden1 = tf.keras.layers.Dense(q, activation='relu')(hidden0)
-    outputs1 = tf.keras.layers.Dense(9, activation='linear')(hidden1)
-    outputs2 = tf.keras.layers.Dense(9, activation='linear')(reshape)
-    resout = tf.keras.layers.Add()([outputs1,outputs2])
-    resout = tf.keras.layers.Activation("softmax")(resout)
-    res_model = tf.keras.Model(inputs=inputs, outputs=resout, name="model")
-    opt = tf.keras.optimizers.Adam(learning_rate=r)
-    res_model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])
-    return res_model
 
-make_res_model()
-
-def train_res_model():
-    global res_model
-    if res_model is None:
-        make_res_model()
-    res_model.fit(all_dataset, epochs=EPOCHS, verbose=0)
-
-train_res_model()
-
-# Copy model_move() using softmax
-# Hopefully softmax can work similar to argmax with the residual connections
-def res_model_move(pq, player=0):
-    if player == 0:
-        pq0 = pq.copy()
-    else:
-        pq0 = swap(pq.copy())
-    prob = res_model.predict(pq0.reshape(1, 9, 2), verbose=0)[0]
-    choices = range(9)
-    return np.random.choice(choices, p=prob)
-
-# Seems we can easily get equal or better performance with p,q smaller
-
-
-# Now try using the same structure but set the residual connections first
-# and prevent them from being trained
 
 
 
@@ -527,6 +486,59 @@ def train_model_suggestions():
 # edit: remove reinforcement model
 
 
+# Add residual connectionsto try and help the model learn legal moves only
+def make_res_model(p=10, q=10, r=0.01):
+    global res_model
+    inputs = tf.keras.Input(shape=(9, 2))
+    reshape = tf.keras.layers.Reshape((18,))(inputs)
+    hidden0 = tf.keras.layers.Dense(p, activation='relu')(reshape)
+    hidden1 = tf.keras.layers.Dense(q, activation='relu')(hidden0)
+    outputs1 = tf.keras.layers.Dense(9, activation='linear')(hidden1)
+    #outputs2 = tf.keras.layers.Dense(9, activation='linear')(reshape)
+    outputs2 = tf.keras.layers.Dense(9, activation='linear', trainable=False)(reshape)
+    resout = tf.keras.layers.Add()([outputs1,outputs2])
+    resout = tf.keras.layers.Activation("softmax")(resout)
+    res_model = tf.keras.Model(inputs=inputs, outputs=resout, name="model")
+    opt = tf.keras.optimizers.Adam(learning_rate=r)
+    res_model.compile(loss="categorical_crossentropy", optimizer=opt, metrics=["accuracy"])
+    
+    w1 = np.zeros((18,9))
+    for i in range(9):
+        w1[2*i,i] = 1
+        w1[2*i+1,i] = 1
+    w1 = -20*w1
+    b1 = np.zeros(9)
+    res_model.layers[5].set_weights([w1,b1])
+    
+    return res_model
+
+make_res_model()
+
+def train_res_model():
+    global res_model
+    if res_model is None:
+        make_res_model()
+    res_model.fit(all_dataset, epochs=EPOCHS, verbose=0)
+
+train_res_model()
+
+# Copy model_move() using softmax
+# Hopefully softmax can work similar to argmax with the residual connections
+def res_model_move(pq, player=0):
+    if player == 0:
+        pq0 = pq.copy()
+    else:
+        pq0 = swap(pq.copy())
+    prob = res_model.predict(pq0.reshape(1, 9, 2), verbose=0)[0]
+    choices = range(9)
+    return np.random.choice(choices, p=prob)
+
+# Seems we can easily get equal or better performance with p,q smaller
+
+
+# Now try using the same structure but set the residual connections first
+# and prevent them from being trained
+
 def play_match(player_o, player_x, bestof=100):
     scores = [0, 0, 0]
     illegals = [0, 0]
@@ -546,6 +558,14 @@ def play_match(player_o, player_x, bestof=100):
 #train_model_suggestions()
 #play_match(model_move, suggest_move)
 scores, illegals = play_match(res_model_move, suggest_move)
+
+
+# here we can achieve 99% performance with res_model using
+# fixed residual connections and p=q=10 for the rest of the network
+
+# or letting the network train the residual connections and
+# results in approx -20 to -40 weights on diagonals and not much else
+
 
 def test_pq():
     scores = []
