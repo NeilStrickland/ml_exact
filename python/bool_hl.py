@@ -98,7 +98,7 @@ def load_approx_model(p=3):
 # try to do the boolean functions example in n dimensions
 
 n=3
-bool_in = list(itertools.product(*[[0,1]]*n))
+bool_in = list(itertools.product(*[[0,1]]*n)) #list(itertools.product([0,1], repeat=n))
 bool_funs = list(itertools.product(*[[0,1]]*(2**n)))
 
 # This function creates a model that evaluates all boolean functions

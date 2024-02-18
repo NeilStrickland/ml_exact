@@ -26,7 +26,7 @@ model = None
 
 BATCH_SIZE = 64
 SHUFFLE_SIZE = 100
-EPOCHS = 100
+EPOCHS = 500
 
 board = range(9)
 

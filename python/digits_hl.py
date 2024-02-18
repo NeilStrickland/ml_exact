@@ -7,6 +7,7 @@ import tensorflow as tf
 import numpy as np
 from matplotlib import pyplot as plt
 import os
+from itertools import combinations
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
@@ -443,7 +444,8 @@ def load_approx_model(p=3, q=3):
 
 
 # shows the trained kernels for the first layer as r, g, b in exact.pdf
-def show_approx_kernels():
+# edit: switch for showing the exact values
+def show_approx_kernels(mat=0):
     l = approx_model.layers
     p = l[3].input_shape[3]
     w = approx_model.layers[2].get_weights()[0].reshape(3, 3, p).transpose(2, 0, 1)
@@ -461,7 +463,7 @@ def show_approx_kernels():
         ax = fig.add_axes([x, 0.02, 0.96 / (2*p-1), 0.96])
         ax.set_axis_off()
         ax.imshow(w[i], cmap=cm)
-        print(w[i])
+        if mat == 1: print(w[i])
 
 
 # shows the output for the second layer in 3D in exact.pdf
@@ -543,7 +545,7 @@ make_approx_model(r=r_test)
 #check_approx_model()
 #show_approx_kernels()
 
-weights2 = [[[ 0, -1,  0], [ 1,  1,  1], [ 0, -1,  0]],
+weights1 = [[[ 0, -1,  0], [ 1,  1,  1], [ 0, -1,  0]],
             [[ 0, -1,  0], [-1,  1,  1], [ 0, -1,  0]],
             [[ 0, -1,  0], [ 1,  1, -1], [ 0, -1,  0]],
             [[ 0,  1,  0], [-1,  1, -1], [ 0,  1,  0]],
@@ -555,18 +557,148 @@ weights2 = [[[ 0, -1,  0], [ 1,  1,  1], [ 0, -1,  0]],
             [[-1,  1,  0], [ 1,  1, -1], [ 0, -1, -1]],
             [[-1,  1, -1], [-1,  1,  1], [-1,  1, -1]],
             [[-1,  1, -1], [ 1,  1, -1], [-1,  1, -1]]]
-bias2 = [-2, -1, -1, -2, -1, -1, -2, -2, -2, -2, -3, -3]
+bias1 = [-2, -1, -1, -2, -1, -1, -2, -2, -2, -2, -3, -3]
 
-sk = [1,2,6]
-weights2 = np.array(weights2)[sk,:].transpose((1, 2, 0)).reshape((3, 3, 1, 3))
-bias2 = np.array(bias2)[sk]
+sk = [1,2,10]
+weights2 = np.array(weights1)[sk,:].transpose((1, 2, 0)).reshape((3, 3, 1, 3))
+bias2 = np.array(bias1)[sk]
 #make_approx_model(r=r_test)
 #approx_model.layers[2].set_weights([weights2,bias2])
 #show_approx_kernels()
 
-for i in range(5):
-    make_approx_model(r=r_test)
-    approx_model.layers[2].set_weights([weights2,bias2])
-    train_approx_model()
-    print(check_approx_model())
-    show_approx_kernels()
+
+
+
+from sklearn.decomposition import PCA
+x = np.reshape(weights1, (12,9))
+np.linalg.matrix_rank(x)
+pca = PCA(n_components=6).fit(x)
+x1 = np.round(pca.components_, 8)
+x2 = x1[0:3,].reshape((3, 3, 1, 3))
+b1 = 1-sum(x1[0:3,].T)
+pca.explained_variance_ratio_.cumsum()
+
+#approx_model.layers[2].set_weights([x2,b1])
+
+def test_sk():
+    sk = [1,2,6]
+    callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, verbose=0)
+    weights1 = [[[ 0, -1,  0], [ 1,  1,  1], [ 0, -1,  0]],
+            [[ 0, -1,  0], [-1,  1,  1], [ 0, -1,  0]],
+            [[ 0, -1,  0], [ 1,  1, -1], [ 0, -1,  0]],
+            [[ 0,  1,  0], [-1,  1, -1], [ 0,  1,  0]],
+            [[ 0, -1,  0], [-1,  1, -1], [ 0,  1,  0]],
+            [[ 0,  1,  0], [-1,  1, -1], [ 0, -1,  0]],
+            [[-1, -1,  0], [-1,  1,  1], [ 0,  1, -1]],
+            [[ 0, -1, -1], [ 1,  1, -1], [-1,  1,  0]],
+            [[ 0,  1, -1], [-1,  1,  1], [-1, -1,  0]],
+            [[-1,  1,  0], [ 1,  1, -1], [ 0, -1, -1]],
+            [[-1,  1, -1], [-1,  1,  1], [-1,  1, -1]],
+            [[-1,  1, -1], [ 1,  1, -1], [-1,  1, -1]]]
+    bias1 = [-2, -1, -1, -2, -1, -1, -2, -2, -2, -2, -3, -3]
+    weights2 = np.array(weights1)[sk,:].transpose((1, 2, 0)).reshape((3, 3, 1, 3))
+    bias2 = np.array(bias1)[sk]
+
+    for i in range(5):
+        make_approx_model(r=r_test)        
+        approx_model.layers[2].set_weights([weights2,bias2])
+        hist = approx_model.fit(all_dataset,
+                                epochs=EPOCHS,
+                                verbose=0,
+                                callbacks=[callback],
+                                validation_data=(x_all, y_all),
+                                validation_batch_size=np.shape(y_all)[0])
+        print(check_approx_model())
+        print(np.shape(hist.history['loss']))
+        #show_approx_kernels(mat=0)
+        plt.plot(hist.history['val_loss'], label=repr(sk), color='blue')
+
+    for j in range(5):
+        make_approx_model(r=r_test)
+        hist = approx_model.fit(all_dataset,
+                                epochs=EPOCHS,
+                                verbose=0,
+                                callbacks=[callback],
+                                validation_data=(x_all, y_all),
+                                validation_batch_size=np.shape(y_all)[0])
+        print(check_approx_model())
+        print(np.shape(hist.history['loss']))
+        #show_approx_kernels(mat=0)
+        plt.plot(hist.history['val_loss'], label='random', color='green')
+    
+    plt.show()
+
+test_sk()
+#time series of the loss for plotting etc
+#hist.history['loss']
+
+x = np.reshape(weights1, (12,9)).T
+y = np.reshape(approx_model.layers[2].get_weights()[0], (3,9)).T
+
+x0 = np.delete(x,(0,3,10,11),1)
+y0 = y[:,0]
+
+from sklearn.linear_model import LinearRegression
+
+reg = LinearRegression().fit(x,y)
+
+#hist.history['val_accuracy'][np.shape(hist.history['val_accuracy'])[0]-1]
+
+
+
+# big loop
+
+
+#np.array([combo for combo in combinations(range(12),3)])
+
+#for combo in combinations(lst, 2):  # 2 for pairs, 3 for triplets, etc
+#    print(combo)
+
+
+def test_all():
+    global sk_loss_mean, sk_all
+    weights1 = [[[ 0, -1,  0], [ 1,  1,  1], [ 0, -1,  0]],
+                [[ 0, -1,  0], [-1,  1,  1], [ 0, -1,  0]],
+                [[ 0, -1,  0], [ 1,  1, -1], [ 0, -1,  0]],
+                [[ 0,  1,  0], [-1,  1, -1], [ 0,  1,  0]],
+                [[ 0, -1,  0], [-1,  1, -1], [ 0,  1,  0]],
+                [[ 0,  1,  0], [-1,  1, -1], [ 0, -1,  0]],
+                [[-1, -1,  0], [-1,  1,  1], [ 0,  1, -1]],
+                [[ 0, -1, -1], [ 1,  1, -1], [-1,  1,  0]],
+                [[ 0,  1, -1], [-1,  1,  1], [-1, -1,  0]],
+                [[-1,  1,  0], [ 1,  1, -1], [ 0, -1, -1]],
+                [[-1,  1, -1], [-1,  1,  1], [-1,  1, -1]],
+                [[-1,  1, -1], [ 1,  1, -1], [-1,  1, -1]]]
+    bias1 = [-2, -1, -1, -2, -1, -1, -2, -2, -2, -2, -3, -3]
+
+    included = [1,2,4,5,6,7,8,9]
+    sk_all = np.array([combo for combo in combinations(included,3)])
+    #sk_all = [combo for combo in combinations(included,3)]
+    callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, verbose=0)
+    sk_loss_mean = []
+
+    for sk in sk_all: #sk = starting kernels
+        weights2 = np.array(weights1)[sk,:].transpose((1, 2, 0)).reshape((3, 3, 1, 3))
+        bias2 = np.array(bias1)[sk]
+        loss_time = []
+
+        for i in range(1):
+            make_approx_model(r=r_test)
+            approx_model.layers[2].set_weights([weights2,bias2])
+            hist = approx_model.fit(all_dataset,
+                                    epochs=EPOCHS,
+                                    verbose=0,
+                                    callbacks=[callback],
+                                    validation_data=(x_all, y_all),
+                                    validation_batch_size=np.shape(y_all)[0])
+            loss_time.append(hist.history['val_loss'])
+    
+        loss_mean = np.mean(np.array(loss_time), axis=0)
+        sk_loss_mean.append(loss_mean)
+        plt.plot(loss_mean, label=repr(sk))
+        print(repr(sk)+" done.")
+
+    plt.show()
+
+#test_all()
+    
