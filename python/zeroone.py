@@ -247,7 +247,7 @@ def state_model(text_tensor):
 
     # Create a model and run an arbitrary prediction to initialize
     model = tf.keras.models.Sequential()
-    model.add(tf.keras.layers.SimpleRNN(10, return_sequences=True, activation='linear'))
+    model.add(tf.keras.layers.SimpleRNN(10, return_sequences=True, activation='relu'))
     test = model.predict(text_tensor)
 
     W0 = np.array([[ 0, 1, 0, 0, 0, 0, 0],
@@ -270,7 +270,7 @@ def state_model(text_tensor):
                    [ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
                    [ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
                    [ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
-                   [ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]])
+                   [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
 
     B0 = np.array([ 0, -1, -1, -1, 0, -1, -1, -1, -1, 0])
 
@@ -311,7 +311,7 @@ def full_model(text_tensor):
                     [ 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
                     [ 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
                     [ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
-                    [ 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]])
+                    [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
 
     B0 = np.array([ 0, -1, -1, -1, 0, -1, -1, -1, -1, 0])
 

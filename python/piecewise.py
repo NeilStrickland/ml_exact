@@ -12,28 +12,32 @@ models_dir = os.path.realpath(os.path.join(src_dir, '../models'))
 
 
 # f(x) = c + m0*x + sum((mi - m_i-1)(x - ai))
+# need to add x = (x)_+ - (-x)_+ to first layer!
 
 # make model for the R -> R case
 def make_exact_model(a, m, c):
     global exact_model
     r = int(m.shape[0])
     inputs = tf.keras.Input(shape=(1))
-    dense1 = tf.keras.layers.Dense(r, activation='relu')(inputs)
+    dense1 = tf.keras.layers.Dense(r+1, activation='relu')(inputs)
     dense2 = tf.keras.layers.Dense(1, activation='linear')(dense1)
     exact_model = tf.keras.Model(inputs=inputs, outputs=dense2, name='exact_model')
     exact_model.compile(loss='binary_crossentropy', metrics=['accuracy'])
 
-    w0 = np.ones((1,r))
-    b0 = np.concatenate(([0],-a))
+    w0 = np.ones((1,r+1))
+    w0[0,1] = -1
+    b0 = np.concatenate(([0]*2,-a))
     exact_model.layers[1].set_weights([w0,b0])
 
-    w1 = np.diff(m, prepend=0).reshape(r,1)
+    w1 = np.concatenate((np.array([m[0]]),np.diff(m, prepend=0)))
+    w1[1] = -w1[1]
+    w1 = w1.reshape(r+1,1)
     b1 = np.array([c])
     exact_model.layers[2].set_weights([w1,b1])
 
 
 a0 = np.array([0,1,2,3])
-m0 = np.array([0,2,4,6,8])
+m0 = np.array([1,2,4,6,8])
 c0 = 1
 
 make_exact_model(a0, m0, c0)
