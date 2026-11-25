@@ -3,6 +3,7 @@
 \usepackage{fullpage}
 \usepackage{amsrefs}
 \usepackage{verbatim}
+\usepackage{hhline}
 \usepackage{tikz}
 \usetikzlibrary{matrix,arrows,decorations.pathmorphing, cd}
 
@@ -26,6 +27,7 @@
 
 \newcommand{\Dl}        {\Delta}
 \newcommand{\Lm}        {\Lambda}
+\newcommand{\Sg}        {\Sigma}
 
 \newcommand{\ho}	{\widehat{o}}
 \newcommand{\hp}	{\widehat{p}}
@@ -35,6 +37,7 @@
 \newcommand{\fg}[4]{\fill[gray] (#1,#2) rectangle (#3,#4);}
 \newcommand{\gr}[1]{\foreach \i in {0,1,...,#1} {\draw(\i,0) -- (\i,#1); \draw(0,\i) -- (#1,\i);}}
 
+\newcommand{\es}        {\emptyset}
 \newcommand{\xra}       {\xrightarrow}
 \newcommand{\sm}        {\setminus}
 \newcommand{\st}        {\;|\;}
@@ -92,7 +95,7 @@ individual boolean function $f\:\{0,1\}^2\to\{0,1\}$.  Of the $16$
 possibilities for $f$, two are constant.  A further $12$ can be put in
 the form $f(x,y)=a\pm(bx+cy+d)_+$.  The remaining two are
 $f(x,y)=x\oplus y=(x-y)_++(y-x)_+$ and 
-$f(x,y)=\not(x\oplus y)=1-(x-y)_+-(y-x)_+$.  One can check that these
+$f(x,y)=\neg(x\oplus y)=1-(x-y)_+-(y-x)_+$.  One can check that these
 cannot be represented in the form $a\pm(bx+cy+d)_+$. 
 
 A similar construction computes any function of $n$ boolean variables
@@ -363,6 +366,218 @@ I think that this is a simpler way:
  $(0,\dl(x))$.  I have implemented this in Maple but not in tensorflow.
 \end{example}
 
+\section{Binary words}
+
+It should be possible to write an explicit network to translate
+English to German, where the only allowed English words are ``zero''
+and ``one'' (to be translated as ``null'' and ``eins'').  Text
+processing networks typically start with a word tokenizer, which
+would make the problem trivial.  Instead we should assume that the
+input is given as a sequence $s$ of characters, of length $n$ say.
+In the discussion below, the space character is represented by $-$,
+and $*$ refers to any character not in the string $zero-one$.  We
+write $s_{<k}$ for the substring consisting of the first $k$
+characters of $s$.  We define $C(s)\in\{zero-,one-,*\}^n$ by 
+\[ C(s)_k = \begin{cases}
+    zero- & \text{ if } s_{<k} \text{ is equal to } 
+             zero- \text{ or ends with } -zero- \\
+    one- & \text{ if } s_{<k} \text{ is equal to } 
+             one- \text{ or ends with } -one- \\
+    * & \text{ otherwise. }
+   \end{cases}
+\]
+Our first task is to design a neural network implementation of the
+function $C$. 
+
+We write $\emptyset$ for the empty string.  We define the \emph{final
+ segment} of $s$ as follows: 
+\begin{itemize}
+ \item If $s$ contains no spaces then the final segment is $s$
+  itself. 
+ \item If $s$ is equal to $zero-$ or ends with $-zero-$, then the
+  final segment is $zero-$.
+ \item If $s$ is equal to $one-$ or ends with $-one-$, then the
+  final segment is $one-$.
+ \item In all other cases, the final segment is the part of $s$
+  after the last space in $s$.
+\end{itemize}
+Put $A=\{z,ze,zer,zero,zero-,o,on,one,one-,\emptyset\}$ and 
+$A_*=A\amalg\{*\}$.  Consider a string $s$ with final segment
+$\tau$.  We define the corresponding \emph{state} to be $\tau$ (if
+$\tau\in A$) or $*$ (if $\tau\not\in A$).  It will clearly be enough
+to determine the state corresponding to $s_{<k}$ for all $k$.  The
+state changes as follows when we append an extra character:
+\[ \begin{array}{|c||c|c|c|c|c|c|c|c|c|c|c|} \hline
+      & z   & ze  & zer & zero  & o   & on  & one  & zero- & one- & *   & \es \\ 
+      \hhline{|=|=|=|=|=|=|=|=|=|=|=|=|}
+    - & \es & \es & \es & zero- & \es & \es & one- & \es   & \es  & \es & \es \\ \hline
+    z & *   & *   & *   & *     & *   & *   & *    & z     & z    & *   & z   \\ \hline
+    e & ze  & *   & *   & *     & *   & one & *    & *     & *    & *   & *   \\ \hline
+    r & *   & zer & *   & *     & *   & *   & *    & *     & *    & *   & *   \\ \hline
+    o & *   & *   & *   & *     & *   & *   & *    & o     & o    & *   & o   \\ \hline
+    n & *   & *   & *   & *     & on  & *   & *    & *     & *    & *   & *   \\ \hline
+    * & *   & *   & *   & *     & *   & *   & *    & *     & *    & *   & *   \\ \hline
+   \end{array}
+\]
+To make a neural network version of this, we need to encode
+characters as vectors in $\R^7$ and states as vectors in $\R^{10}$.
+The characters $-,z,e,r,o,n,*$ will correspond to
+$e_0,\dotsc,e_6\in\R^7$.  The states $z,ze,zer,zero,o,on,one$ will
+correspond to $e_0+e_9,\dotsc,e_6+e_9$, the states $zero-,one-$ and
+$*$ will correspond to $e_7$, $e_8$ and $e_9$, and the state
+$\emptyset$ will correspond to the zero vector.
+
+Now consider the following matrices:
+\[ \tiny W = \begin{bmatrix}
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 & 1 &-1 \\
+     1 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 \\
+     0 & 1 & 0 & 0 & 0 & 0 & 1 & 0 & 0 & 1 \\
+     0 & 0 & 1 & 0 & 0 & 0 & 0 & 0 & 0 & 1 \\
+     0 & 0 & 0 & 1 & 1 & 0 & 0 & 0 & 0 & 1 \\
+     0 & 0 & 0 & 0 & 0 & 1 & 0 & 0 & 0 & 1 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 
+    \end{bmatrix}
+    \qquad
+    U = \begin{bmatrix}
+     0 & 1 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+     0 & 0 & 1 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+     0 & 0 & 0 & 1 &-1 & 0 & 0 & 0 & 0 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 & 0 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 1 & 0 & 0 & 0 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 1 & 0 & 0 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+     0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+    -1 & 0 & 0 & 0 &-1 & 0 & 0 & 0 & 0 & 0 
+    \end{bmatrix}
+\]
+\[ b =
+    \begin{bmatrix} 0 & -1 & -1 & -1 & 0 & -1 & -1 & -1 & -1 & 0 \end{bmatrix}
+\]
+Given vectors $i\in\R^7$ and $h\in\R^{10}$ we define
+$f(i,h)=(iW+hU+b)_+\in\R^{10}$.  We claim that if $i$ is a basis
+vector corresponding to an input character $c$, and $h$ is a state
+vector corresponding to a string $s$, then $f(i,h)$ is the state
+vector corresponding to the string $sc$.  To check this, note that
+for many values of $k$ we have $b_k=-1$ and $(iW)_k,(hU)_k\in\{-1,0,1\}$.
+so $f(i,h)_k$ will be one if $(iW)_k=(hU)_k=1$ and zero otherwise.  
+Given this, it is straightforward to check all the cases.
+
+The above observations can be translated quite directly into the
+design of a recurrent neural network in which the first layer
+(of class \texttt{SimpleRNN} in keras) computes the sequence of state
+vectors, and a small dense layer on top of that produces the
+specified output.
+
+\section{Piecewise-linear functions}
+
+Consider a piecewise-linear function $f\:\R\to\R$ with finitely many
+corners, so there are real numbers $a_1<\dotsb<a_r$ and slopes
+$m_0,\dotsc,m_r$ and a constant $c$ such that 
+\begin{itemize}
+ \item[(a)] $f(x)=m_0x+c$ on $(-\infty,a_1]$
+ \item[(b)] $f(x)$ has slope $m_i$ on $[a_i,a_{i+1}]$ for
+  $i=1,\dotsc,r-1$
+ \item[(c)] $f(x)$ has slope $m_r$ on $[a_r,\infty)$.
+\end{itemize}
+Then 
+\[ f(x) = c + m_0 x + \sum_{i=1}^r (m_i-m_{i-1})(x-a_i)_+. \]
+This description can be translated into a RELU layer followed by a
+linear layer.
+
+Now consider a bounded convex piecewise-linear subset $X\subset\R^d$
+that is the closure of its interior, and a piecewise-linear map 
+$f\:X\to\R$.  It is a nontrivial theorem that $X$ can be triangulated
+in such a way that every maximal simplex is $d$-dimensional and the
+restriction of $f$ to each such simplex is affine.  In more detail, we
+can choose a set $V=\{v_0,\dotsc,v_{p-1}\}$ of vertices in $X$, and a
+set  $\Sg=\{\sg_0,\dotsc,\sg_{q-1}\}$ where
+\begin{itemize}
+ \item[(a)] Each $\sg_i$ is a subset of size $d+1$ in $V$, say
+  $\sg_i=\{u_{i0},\dotsc,u_{id}\}\subset V$, and the vectors 
+  $u_{i1}-u_{i0},\dotsc,u_{id}-u_{i0}$ are linearly independent, so 
+  the convex hull $|\sg_i|$ is a standard $d$-simplex.
+ \item[(b)] For each $i$ and $j$ the intersection $|\sg_i|\cap|\sg_j|$
+  is the convex hull of $\sg_i\cap \sg_j$, so it is either empty or a
+  common face of $|\sg_i|$ and $|\sg_j|$.
+ \item[(c)] $X$ is the union of the sets $|\sg_i|$.
+\end{itemize}
+The linear independence condition means that for each simplex $\sg_i$
+and vertex $v_j\in\sg_i$ there is a unique affine map
+$\al_{ij}\:\R^d\to\R$ with $\al_{ij}(v_j)=1$ and $\al_{ij}(u)=0$ for
+$u\in\sg_i\sm\{v_j\}$.  We define $\bt_j$ to be the minimum of the
+maps $\max(0,\al_{ij})$, with $i$ running over all the indices for
+which $v_j\in\sg_i$.  This is a piecewise-linear map with the property
+that $\bt_j(v_j)=1$, and I think we also have $\bt_j(v_k)=0$ for 
+$k\neq j$, although I have not written a full proof of that yet.
+Assuming this, as $f$ is affine on each simplex, it must have the form
+$f=\sum_ja_j\bt_j$ for some constants $a_j$.  This means that $f$ can
+be computed by a RELU layer, followed by a min pooling layer, followed
+by a linear layer.
+
+One might try to represent an arbitrary piecewise-linear function
+$f\:[0,1]^d\to\R$ by a RELU layer followed by a linear layer, but one
+can show that that is not possible.  
+
+\begin{definition}
+ Consider a finite-dimensional vector space $V$ and a map $f\:V\to\R$.
+ By an $F$-representation of $f$ we mean an expression of the form 
+ \[ f(v)=c+\sum_im_i(\al_i(v)-b_i)_+ \]
+ for some coefficients $m_i,b_i\in\R$ and linear maps $\al_i\in V^*$.
+ This is essentially the same as a representation of $f$ by a RELU
+ layer followed by a linear layer.  We say that this is an
+ $F_0$-representation if $c=0$ and $b_i=0$ for all $i$.
+\end{definition}
+
+\begin{lemma}
+ If $f$ has an $F_0$-representation then the map $(Tf)(v)=f(v)-f(-v)$ is
+ linear. 
+\end{lemma}
+\begin{proof}
+ If $f(v)=\sum_im_i\al_i(v)_+$ then $(Tf)(v)=\sum_im_i\al_i(v)$.
+\end{proof}
+
+\begin{definition}
+ We consider the maps $m\:\R^3\to\R$ and $n\:\R^2\to\R$ given by
+ $m(x,y,z)=\max(x,y,z)$ and $n(x,y)=\max(x,y,-x-y)$.
+\end{definition}
+
+\begin{lemma}
+ Neither $m$ nor $n$ has an $F$-representation.
+\end{lemma}
+\begin{proof}
+ We first claim that $n$ has no $F_0$-representation.  Indeed, we have
+ $(Tn)(x,y)=\max(x,y,-x-y)+\min(x,y,-x-y)$.  This gives
+ $(Tn)(1,0)=(Tn)(0,1)=0$ but $(Tn)(1,1)=-1$ so there is no
+ $F_0$-representation.  Now suppose that we had an $F$-representation 
+ \[ n(x,y) = c+\sum_iu_i(\al_i(x,y)-b_i)_+ \] 
+ Then for $k>0$ we have 
+ \[ n(x,y) = k^{-1}n(kx,ky) = 
+     k^{-1}c + \sum_iu_i(\al_i(x,y)-b_i/k)_+.
+ \]
+ By taking the limit as $k\to\infty$, we obtain an
+ $F_0$-representation of $n$, which is impossible.  Thus, $n$ has no
+ $F$-representation.  An $F$-representation of $m$ would restrict to
+ give an $F$-representation of $n$, so again no such representation
+ can exist.
+\end{proof}
+
+We now prove something slightly stronger:
+\begin{proposition}
+ There is no map $m'\:\R^3\to\R$ that admits an $F$-representation and
+ agrees with $m$ on $[0,1]^3$.
+\end{proposition}
+\begin{proof}
+ Suppose that $m'(v)=c+\sum_{i\in I}u_i(\al_i(v)-b_i)_+$ for all
+ $v\in[0,1]^3$.  Put $e=(1,1,1)\in\R^3$ and $a_i=\al_i(e)\in\R$.  Then
+ for $0\leq t\leq 1$ we have 
+ \[ t = m'(te) = c + \sum_{i\in I}u_i(ta_i-b_i)_+. \]
+ \textbf{Unfinished.}  We have a proof for a slightly more restricted
+ class of representations but not in this generality.  The idea is to
+ fix a suitable $t\in(0,1)$ and derive a contradiction by considering
+ $m'(te+\ep(x,y,z))$ for small $\ep>0$.
+\end{proof}
+
 \section{Miscellaneous other examples}
 
 \begin{example}\label{eg-intervals}
@@ -424,15 +639,6 @@ I think that this is a simpler way:
  \texttt{maple/train\_delta.mw}. 
 \end{example}
 
-\begin{example}\label{eg-binary-words}
- It should be possible to write an explicit network to translate
- English to German, where the only allowed English words are ``zero''
- and ``one'' (to be translated as ``null'' and ``eins'').  Text
- processing networks typically start with a word tokenizer, which
- would make the problem trivial.  Instead we should assume that the
- input is given as a sequence of characters.
-\end{example}
-
 \begin{example}\label{eg-letters}
  The letters C,H,I,J,L,O,T,U,X,Y can be represented using as $3\times 3$
  pixel images.  These are shown below, grouped according to the number of 
@@ -459,21 +665,6 @@ I think that this is a simpler way:
  detect and count these words.
 \end{example}
 
-\begin{example}\label{eg-pl}
- Consider a piecewise-linear function $f\:\R\to\R$ with finitely many
- corners, so there are real numbers $a_1<\dotsb<a_r$ and slopes
- $m_0,\dotsc,m_r$ and a constant $c$ such that 
- \begin{itemize}
-  \item[(a)] $f(x)=m_0x+c$ on $(-\infty,a_1]$
-  \item[(b)] $f(x)$ has slope $m_i$ on $[a_i,a_{i+1}]$ for
-   $i=1,\dotsc,r-1$
-  \item[(c)] $f(x)$ has slope $m_r$ on $[a_r,\infty)$.
- \end{itemize}
- Then 
- \[ f(x) = c + m_0 x + \sum_{i=1}^r (m_i-m_{i-1})(x-a_i)_+. \]
- However, the situation with piecewise-linear functions in more than
- one variable seems unclear.
-\end{example}
 
 
 

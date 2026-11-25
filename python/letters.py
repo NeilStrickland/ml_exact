@@ -1,709 +1,575 @@
-# Try example 6.5
-import tensorflow as tf
-import numpy as np
 import os
+os.environ["KERAS_BACKEND"] = "tensorflow"
+
+import numpy as np
+import keras
+from keras import layers, ops, initializers
+import itertools
+from plotly.subplots import make_subplots
+from plotly import graph_objects as go
+
+class Letter:
+    """
+    The letters iyjcolhtux can be represented in a reasonable way 
+    as 3x3 pixel images with entries in {0,1}.  This class represents 
+    3x3 array of image, which might or might not be one of those
+    letters.  If it is one of those letters then the index attribute 
+    will be an integer from 0 to 9, and the value attribute will be 
+    the corresponding letter.  If it is not one of those letters then 
+    the index and value attributes will be None.  The image attribute
+    is always a 3x3 array of 0s and 1s.
+    """
+    values = "?iyjcolhtux"
+    num_values = len(values)
+    size = 3
+    area = size*size
+    images = np.array([
+        [[0,0,0],[0,0,0],[0,0,0]],
+        [[0,1,0],[0,1,0],[0,1,0]],
+        [[1,0,1],[0,1,0],[0,1,0]],
+        [[0,0,1],[0,0,1],[1,1,1]],
+        [[1,1,1],[1,0,0],[1,1,1]],
+        [[1,1,1],[1,0,1],[1,1,1]],
+        [[1,0,0],[1,0,0],[1,1,1]],
+        [[1,0,1],[1,1,1],[1,0,1]],
+        [[1,1,1],[0,1,0],[0,1,0]],
+        [[1,0,1],[1,0,1],[1,1,1]],
+        [[1,0,1],[0,1,0],[1,0,1]]
+        ], dtype=np.int32)
+
+    lookup_table = dict(zip(
+        map(lambda x: tuple(int(j) for j in x.reshape(-1)), images[1:]), 
+        range(1, num_values)))
+
+    def __init__(self, index=None, value=None, image=None):
+        if index is not None:
+            if index < 0 or index >= len(Letter.values):
+                raise ValueError(f"Letter index {index} out of range")
+            self.index = index
+            self.value = Letter.values[index]
+            self.image = Letter.images[index]
+        elif value is not None:
+            # set i to the position of value in values, or -1 if not found
+            i = Letter.values.find(value)
+            if i == -1:
+                raise ValueError(f"Letter {value} not recognised")
+            self.index = i
+            self.value = value
+            self.image = Letter.images[i]
+        elif image is not None:
+            self.image = np.array(image)
+            i = tuple(int(j) for j in self.image.reshape(-1))
+            if i in Letter.lookup_table:
+                self.index = Letter.lookup_table[i]
+                self.value = Letter.values[self.index]
+            else:
+                self.index = 0
+                self.value = '?'
+        else:
+            self.index = 0
+            self.value = '?'
+            self.image = Letter.images[0]
+
+    def __str__(self):
+        return self.value
+
+    def __repr__(self):
+        if self.index > 0:
+            return f"Letter({self.value})"
+        else:
+            i = tuple(int(j) for j in self.image.reshape(-1))
+            i = [i[0:3], i[3:6], i[6:9]]
+            return f"Letter(image={i})"
+
+    def one_hot(self):
+        """
+        Return a one-hot vector of length Letter.num_values, with a 1 
+        in the position corresponding to the letter's index.
+        """
+        v = np.zeros(Letter.num_values)
+        v[self.index] = 1
+        return v
+
+    def show(self, fig=None, x0=0, y0=0):
+        if fig is None:
+            fig = go.Figure()
+            fig.update_layout(width=300, height=300, margin=dict(l=2,r=2,b=2,t=2))
+            fig.update_yaxes(scaleanchor="x",scaleratio=1)
+            fig.update_xaxes(range=[0,Letter.size], showticklabels=False, showgrid=True, zeroline=False)
+            fig.update_yaxes(range=[0,Letter.size], showticklabels=False, showgrid=True, zeroline=False, autorange="reversed")
+        p = Letter.size
+        xs = list(x0 + i for i in range(p+1))
+        ys = list(y0 + i for i in range(p+1))
+        im = go.Heatmap(
+            x=xs, y=ys, z=self.image, 
+            colorscale='Greys', showscale=False
+        )
+        fig.add_trace(im)
+        return fig
+
+    @staticmethod
+    def list_good():
+        return [Letter(index=i) for i in range(1, Letter.num_values)]
+
+    @staticmethod
+    def list_all():
+        all_images = np.array(list(itertools.product(*[[0,1]]*9))).reshape(512,3,3)
+        return [Letter(image=i) for i in all_images]
+
+    @staticmethod
+    def dataset(good=False):
+        if good:
+            letters = Letter.list_good()
+        else:
+            letters = Letter.list_all()
+        x = np.array([l.image for l in letters])
+        y = np.array([l.one_hot() for l in letters])
+        return x, y
+
+class Text:
+    """
+    A text is an array of values in {0,1}, of shape (h, w) say.
+    The index (i, j) is to be thought of as the pixel in row i 
+    and column j.  Typically h will be between 3 and 10, and w
+    will be larger.  The array is expected to contain 3x3 blocks
+    representing letters as in the Letter class, arranged in a
+    rough line but possibly with some noise. 
+    """
+
+    def __init__(self, image=None, letters=None, ragged=False, height=None, width=None):
+        if image is not None:
+            self.image = np.array(image)
+            self.width, self.height = self.image.shape
+        elif letters is not None:
+            if ragged:
+                self.height = 2 * Letter.size
+                self.width = (Letter.size + 2) * len(letters)
+                if height is not None and height > self.height:
+                    self.height = height
+                if width is not None and width > self.width:
+                    self.width = width
+                self.image = np.zeros((self.height, self.width), dtype=np.int32)
+                x = np.random.randint(0, 2)
+                for i, letter in enumerate(letters):
+                    y = np.random.randint(0, self.height-Letter.size)
+                    self.add_letter(letter, y, x)
+                    x += Letter.size + np.random.randint(1, 3)
+                    y = np.random.randint(0, Letter.size + 1)
+            else:
+                self.height = Letter.size
+                self.width = (Letter.size + 1) * len(letters)
+                if height is not None and height > self.height:
+                    self.height = height
+                if width is not None and width > self.width:
+                    self.width = width
+                self.image = np.zeros((self.height, self.width), dtype=np.int32)
+                for i, letter in enumerate(letters):
+                    self.add_letter(letter, 0, (Letter.size + 1)*i)
+        else:
+            self.width = width
+            self.height = height
+            self.image = np.zeros((self.height, self.width), dtype=np.int32)
+
+    def add_letter(self, letter, i, j):
+        """
+        Add a letter to the text at position (i, j).  The letter is
+        a Letter object.  The position (i, j) is the top left corner
+        of the 3x3 block representing the letter.
+        """
+        if isinstance(letter, str):
+            letter = Letter(value=letter)
+        elif isinstance(letter, int):
+            letter = Letter(index=letter)
+        self.image[i:i+Letter.size, j:j+Letter.size] = letter.image
+
+    def show(self, fig=None):
+        d = np.round(800 / max(self.width, self.height))
+        if fig is None:
+            fig = go.Figure()
+            fig.update_layout(width=self.width * d, height=self.height * d, margin=dict(l=2,r=2,b=2,t=2))
+            fig.update_yaxes(scaleanchor="x",scaleratio=1)
+            fig.update_xaxes(range=[0,self.width], showticklabels=False, showgrid=True, zeroline=False)
+            fig.update_yaxes(range=[0,self.height], showticklabels=False, showgrid=True, zeroline=False, autorange="reversed")
+        xs = list(range(self.width+1))
+        ys = list(range(self.height+1))
+        im = go.Heatmap(x=xs, y=ys,z=self.image, 
+                        colorscale='Greys', showscale=False)
+        fig.add_trace(im)
+        return fig
 
 
-# Generate a "pixel" array from input letter
-def letter_input(letter):
-    match letter:
-        case "i": return np.array([
-            [0,1,0],
-            [0,1,0],
-            [0,1,0]
-        ])
-        case "y": return np.array([
-            [1,0,1],
-            [0,1,0],
-            [0,1,0]
-        ])
-        case "j": return np.array([
-            [0,0,1],
-            [0,0,1],
-            [1,1,1]
-        ])
-        case "c": return np.array([
-            [1,1,1],
-            [1,0,0],
-            [1,1,1]
-        ])
-        case "o": return np.array([
-            [1,1,1],
-            [1,0,1],
-            [1,1,1]
-        ])
-        case "l": return np.array([
-            [1,0,0],
-            [1,0,0],
-            [1,1,1]
-        ])
-        case "h": return np.array([
-            [1,0,1],
-            [1,1,1],
-            [1,0,1]
-        ]) 
-        case "t": return np.array([
-            [1,1,1],
-            [0,1,0],
-            [0,1,0]
-        ])
-        case "u": return np.array([
-            [1,0,1],
-            [1,0,1],
-            [1,1,1]
-        ])
-        case "x": return np.array([
-            [1,0,1],
-            [0,1,0],
-            [1,0,1]
-        ])
+class LetterModel(keras.Model):
+    """
+    An exact model that recognises letters from 3x3 images.
 
+    The input is a 3x3 image with entries in {0,1}.  The output is a
+    vector of length 11, where the first 10 entries are the probabilities
+    that the image is a particular letter from the string Letter.values.
+    The last entry is the probability that the image is not a letter.  
+    These probabilities will always be close to 0 or 1,
+    so we can use argmax to choose the letter.
+    """
 
-# Choose a letter from tensor output prediction using argmax
-def letter_choose(pred):
-    i = np.argmax(pred)
-    match i:
-        case 0:  return "i"
-        case 1:  return "y"
-        case 2:  return "j"
-        case 3:  return "c"
-        case 4:  return "o"
-        case 5:  return "l"
-        case 6:  return "h"
-        case 7:  return "t"
-        case 8:  return "u"
-        case 9:  return "x"
-        case _: return "REJECT"
+    def __init__(self, **kwargs):
+        mid_weights = (2 * Letter.images - 1).reshape(-1, Letter.area).T.astype(np.float32)
+        mid_bias = (1 - Letter.images.sum(axis=(1,2))).astype(np.float32)
+        mid_bias[0] = 0
+        out_weights = np.eye(Letter.num_values, dtype=np.float32)
+        out_weights[1:,0] = -1
+        out_bias = np.zeros(Letter.num_values, dtype=np.float32)
+        out_bias[0] = 1
+        super().__init__(**kwargs)
+        self.inp = keras.Input(shape=(Letter.size, Letter.size))
+        self.flatten = keras.layers.Flatten()
+        self.mid = keras.layers.Dense(
+            units=Letter.num_values, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(mid_weights), 
+            bias_initializer=initializers.Constant(mid_bias),
+            trainable=False
+        )
+        self.out = keras.layers.Dense(
+            units=Letter.num_values, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(out_weights), 
+            bias_initializer=initializers.Constant(out_bias),
+            trainable=False
+        )
+        self(np.zeros((1, Letter.size, Letter.size))) # call the model once to build it
 
+    def call(self, x, training=False):
+        y = self.flatten(x)
+        y = self.mid(y, training=training)
+        y = self.out(y, training=training)
+        return y
 
-# Explicit model to recognise letters
-# Output can be fed to letter_choose(), essentially adding argmax
-# activation to the final layer
-def explicit_model():
-    global explicit_model
-    inputs = tf.keras.Input(shape=(3, 3))
-    reshape = tf.keras.layers.Reshape((9,))(inputs)
-    outputs = tf.keras.layers.Dense(11, activation='relu')(reshape)
-    explicit_model = tf.keras.Model(inputs=inputs, outputs=outputs, name="explicit_model")
-    explicit_model.compile(loss="categorical_crossentropy", metrics=["accuracy"])
-
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-
-    b0 = np.array([-2, -3, -4, -6, -7, -4, -6, -4, -6, -4, 1])
-
-    explicit_model.layers[2].set_weights([w0, b0])
-    return explicit_model
-
-explicit_model()
-
-#explicit_model.predict(letter_input("i").reshape(1, 3, 3), verbose=0)[0]
-#letter_choose(explicit_model.predict(letter_input("i").reshape(1, 3, 3),verbose=0)[0])
-
-# Test all letters and one non-letter
-def test_explicit_model():
-    for letter in ["i", "y", "j", "c", "o", "l", "h", "t", "u", "x"]:
-        print(letter_choose(explicit_model.predict(letter_input(letter).reshape(1, 3, 3),verbose=0)[0]))
-
-    print(letter_choose(explicit_model.predict(np.array([[1, 1, 0],
-                                                         [0, 1, 0],
-                                                         [0, 1, 0]]).reshape(1, 3, 3),verbose=0)[0]))
-
-
-test_explicit_model()
-
-# Convert this to convolution network
-# The idea is to take the weights and turn them into 9 separate 3x3 convolution
-# channels
-
-
-# add a letter to a grid with top left i,j
-def write_letter(grid, letter, i, j):
-    if i > np.shape(grid)[0] - 3 or j > np.shape(grid)[1] - 3:
-        print("Letter cannot be added with top corner" + repr(i) + ", " + repr(j))
-        return grid
-    else:
-        grid[i:i+3,j:j+3] = letter_input(letter)
-        return grid
+    def classify(self, x):
+        y = self(x.reshape((1, Letter.size, Letter.size)), training=False)
+        i = np.argmax(y, axis=1)
+        return Letter.values[i[0]]
+        
+    def check(self):
+        x, y = Letter.dataset()
+        y_pred = self(x, training=False)
+        return np.array_equal(y_pred, y)
     
+class TextCountModel(keras.Model):
+    """
+    An exact model that counts letters in a text of the specified size.
+    The output is a vector of length 11, where the first 10 entries are the
+    numbers of instances of the letters in the string letters defined above,
+    and the last entry is the number of 3x3 blocks that do not contain a letter.
+    """
 
-# Fix to 6x15 grid with 4 letter words for development
-zero_grid = np.zeros([6,15])
-input_grid = write_letter(zero_grid,"c",0,0)
-input_grid = write_letter(input_grid,"i",1,4)
-input_grid = write_letter(input_grid,"t",2,8)
-input_grid = write_letter(input_grid,"y",3,12)
+    def __init__(self, height=6, width=15, **kwargs):
+        super().__init__(**kwargs)
+        self.height = height
+        self.width = width
+        LM = LetterModel()
+        self.mid_weights, self.mid_bias = LM.mid.get_weights()
+        self.mid_weights = self.mid_weights.reshape(Letter.size, Letter.size, 1, Letter.num_values)
+        self.hot_weights, self.hot_bias = LM.out.get_weights()
+        self.inp = keras.Input(shape=(self.height, self.width))
+        self.reshape = keras.layers.Reshape((self.height, self.width, 1))
+        self.mid = keras.layers.Conv2D(
+            filters=Letter.num_values, 
+            kernel_size=[Letter.size, Letter.size], 
+            strides=[1, 1], 
+            padding='valid', 
+            activation='relu',
+            kernel_initializer=initializers.Constant(self.mid_weights),
+            bias_initializer=initializers.Constant(self.mid_bias)
+        )
+        self.hot = keras.layers.Dense(
+            units=Letter.num_values, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(self.hot_weights),
+            bias_initializer=initializers.Constant(self.hot_bias)
+        )
+        self.out = layers.Lambda(lambda x: ops.sum(x, axis=(0, 1, 2)))
 
+    def call(self, x, training=False):
+        y = np.array(x).astype(np.float32)
+        y = self.reshape(y)
+        y = self.mid(y, training=training)
+        y = self.hot(y, training=training)
+        y = self.out(y)
+        return y
 
-# 11 channels, 1 per letter (inluding reject)
-# 3x3 filter shape
-# Strides of 1 horizontally, 1 vertically
+    def read(self, text):
+        x = np.zeros((1, self.height, self.width), dtype=np.float32)
+        x[0, :text.height, :text.width] = text.image
+        y = self(x=x, training=False)
+        n = Letter.num_values
+        s = ""
+        for i in tuple(range(1, n)) + (0,):
+            if y[i] > 0:
+                if len(s) > 0:
+                    s += "; "
+                s += f"{Letter.values[i]}: {int(y[i])}"
+        return s
 
-# For max pooling use the height of the input-1, 3-wide, stride 3 across
-# to find each letter detected once
-# Stride height of input-1 limits the output to 1 row
-def conv_model():
-    global conv_model
-    inputs = tf.keras.Input(shape=(6, 15)) # add function arguments for this
-    reshape = tf.keras.layers.Reshape((6, 15, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='linear')(reshape)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(5,3), strides=(5,3), padding='same')(convlayer)
-    conv_model = tf.keras.Model(inputs=inputs, outputs=pooling, name="conv_model")
-    conv_model.compile(loss="categorical_crossentropy", metrics=["accuracy"])
+class ZeroFilterA(keras.Model):
+    """
+    A model that returns the last p nonzero values in a sequence x,
+    which is expected to consist of nonnegative integers.
 
-    # Convolution layer
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
+    The layer nz converts x to a matrix with two rows. The first row is x and the 
+    second row is a=I(x=0)=(1 - x)_+
+
+    The layer gru maintains a hidden vector h of length p, which is initially zero.
+    It gets updated for every entry (x, a) in the input.  The candidate update is
+    hh = Lh + x*e, where L is the left shift operator and e is the last basis vector.
+    The update is h = (1-a)*hh + a*h.  
+
+    In terms of the standard notation for a GRU, we have:
+    z = a * np.ones(p)
+    r = np.ones(p)
+    hh = Lh + x*e
+
+    (There is some ambiguity in the literature about z vs 1-z.  Keras, Pytorch
+    and the original paper by Cho et al. have h = (1-z)*hh + z*h, i.e. we 
+    update with probability 1-z.  However, Wikipedia has h = z*hh + (1-z)*h.)
     
-    # Turns out we can just reshape w0 from the first model
-    w1 = w0.reshape(3,3,1,11)
+    The weights can be explained as follows:
+    v2 = [v2z | v2r | v2h] = [[0 | 0 | e], [np.ones(p) | 0 | 0]]
+    w2 = [w2z | w2r | w2h] = [0 | 0 | L]
+    b2 = [b2z | b2r | b2h] = [0 | np.ones(p) | 0]
+    z  = [x,a] @ v2z + h @ w2z + b2z
+    r  = [x,a] @ v2r + h @ w2r + b2r
+    hh = [x,a] @ v2h + (r * h) @ w2h + b2h
+    """
+
+    def __init__(self, p, **kwargs):
+        self.p = p
+        super().__init__(**kwargs)
+        self.inp = keras.Input(shape=(None,1))
+        self.nz = keras.layers.Dense(
+            units=2, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(np.array([[1.,-1.]])), 
+            bias_initializer=initializers.Constant(np.array([0.,1.]))
+        )
+        v2 = np.zeros((2,3*p))
+        v2[0,3*p-1] = 1
+        v2[1,0:p] = np.ones(p)
+        w2 = np.zeros((p,3*p))
+        w2[1:p,2*p:3*p-1] = np.eye(p-1)
+        b2 = np.zeros(3*p)
+        b2[p:2*p] = np.ones(p)
+        self.gru = keras.layers.GRU(
+            units=p, 
+            activation='linear', 
+            recurrent_activation='linear', 
+            reset_after=False,
+            kernel_initializer=initializers.Constant(v2),
+            recurrent_initializer=initializers.Constant(w2),
+            bias_initializer=initializers.Constant(b2)
+        )
+
+    def call(self, x, training=False):
+        y = self.nz(x, training=training)
+        y = self.gru(y, training=training)
+        return y
+
+class ZeroFilterB(keras.Model):
+    """
+    A model that takes a p-vector x and moves any zeros to the end.
+
+    The layer nz converts x to a matrix with two rows. The first row is x and the 
+    second row is a=I(x=0)=(1 - x)_+
+
+    The layer gru maintains a hidden vector h of length 3*p, which we group
+    into three p-vectors [l0 | l1 | m].  In fact l0 and l1 will be equal.
+    Initially, we have m = 0 and l = l0 = l1 is the first basis vector.
+    Later on, m will contain all the nonzero xs that we have seen so far, 
+    and l will be a basis vector in the place where the next nonzero
+    x should go.
+
+    The vector h gets updated for every entry (x, a) in the input.  The candidate
+    update is hh = [Rl | Rl | m+x*l], where R is the right shift operator.
+    The update is h = (1-a)*hh + a*h.  
+
+    In terms of the standard notation for a GRU, we have:
+    z = a * np.ones(3*p)
+    r = [np.ones(p) | x * np.ones(p) | np.ones(p)]
+    r * h = [l | x * l | m]
+    hh = [Rl | Rl | m+x*l] 
+    """
+    def __init__(self, p, **kwargs):
+        self.p = p
+        super().__init__(**kwargs)
+        self.inp = keras.Input(shape=(p,1))
+        self.nz = keras.layers.Dense(
+            units=2, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(np.array([[1.,-1.]])),
+            bias_initializer=initializers.Constant(np.array([0.,1.]))
+        )
+        h0 = np.zeros((1,3*p))
+        h0[0,0] = 1
+        h0[0,p] = 1
+        self.h0 = h0
+        v2 = np.zeros((2,9*p))
+        v2[0,4*p:5*p] = np.ones(p)
+        v2[1,0  :3*p] = np.ones(3*p)
+        w2 = np.zeros((3*p,9*p))
+        w2[0  :p-1, 6*p+1:7*p] = np.eye(p-1)
+        w2[0  :p-1, 7*p+1:8*p] = np.eye(p-1)
+        w2[p  :2*p, 8*p  :9*p] = np.eye(p)
+        w2[2*p:3*p, 8*p  :9*p] = np.eye(p)
+        b2 = np.zeros(9*p)
+        b2[3*p:4*p] = np.ones(p)
+        b2[5*p:6*p] = np.ones(p)
+        self.gru = keras.layers.GRU(
+            units=3*p, 
+            activation='linear', 
+            recurrent_activation='linear', 
+            reset_after=False,
+            kernel_initializer=initializers.Constant(v2), 
+            recurrent_initializer=initializers.Constant(w2), 
+            bias_initializer=initializers.Constant(b2)
+        )
+        self.compile(loss='mean_squared_error', metrics=['accuracy'])
+
+    def call(self, x, training=False):
+        y = self.nz(x, training=training)
+        y = self.gru(y, initial_state=self.h0, training=training)
+        y = y.numpy().reshape(-1)[-self.p:]
+        return y
+
+class TextModel(keras.Model):
+    def __init__(self, height, width, **kwargs):
+        self.height = height
+        self.width = width
+
+        LM = LetterModel()
+        self.mid_weights, self.mid_bias = LM.mid.get_weights()
+        self.mid_weights = self.mid_weights.reshape(Letter.size, Letter.size, 1, Letter.num_values)
+        self.hot_weights, self.hot_bias = LM.out.get_weights()
+        inp = keras.Input(shape=(self.height, self.width))
+        reshape0 = keras.layers.Reshape((self.height, self.width, 1))(inp)
+
+        # In the descriptions below:
+        # h = self.height, w = self.width, n = Letter.num_values, s = Letter.size
+
+        # mid
+        # output shape : (h-s+1, w-s+1, n)
+        # For i > 0, the output in position (x, y, i) is 1 if the sxs block starting 
+        # at (x, y) is the letter with index i, and 0 otherwise.  The value at 
+        # (x, y, 0) is always zero.    
+        mid = keras.layers.Conv2D(
+            filters=Letter.num_values, 
+            kernel_size=[Letter.size, Letter.size], 
+            strides=[1, 1], 
+            padding='valid', 
+            activation='relu',
+            kernel_initializer=initializers.Constant(self.mid_weights),
+            bias_initializer=initializers.Constant(self.mid_bias)
+        )(reshape0)
+
+        # hot
+        # output shape : (h-s+1, w-s+1, n)
+        # For i > 0, the output in position (x, y, i) is 1 if the sxs block starting 
+        # at (x, y) is the letter with index i, and 0 otherwise.  The value at 
+        # (x, y, 0) is 0 for a good letter, otherwise 1.    
+        hot = keras.layers.Dense(
+            units=Letter.num_values, 
+            activation='relu',
+            kernel_initializer=initializers.Constant(self.hot_weights),
+            bias_initializer=initializers.Constant(self.hot_bias)
+        )(mid)
+
+        # val
+        # output shape : (h-s+1, w-s+1, 2)
+        # If the sxs block starting at (x, y) is the letter of index i > 0, then the 
+        # output in positions (x, y, 0) and (x, y, 1) is (i, i-1).  If the 
+        # block is not a letter then the output is (0, 0).
+        w = np.zeros((2, Letter.num_values), dtype=np.float32)
+        w[0] = np.arange(Letter.num_values)
+        w[1,1:] = np.arange(Letter.num_values-1)
+        val = keras.layers.Dense(
+            units = 2,
+            activation='linear',
+            kernel_initializer=initializers.Constant(w.T)
+        )(hot)
+
+        # pooling
+        # output shape : (1, w-s+1, 2)
+        # If the vertical strip of shape hxs starting at (0, y) contains the 
+        # letter of index i > 0, then the output in positions (0, y, 0) and (0, y, 1) 
+        # is (i, i-1).  If the strip contains several letters, then the one of 
+        # largest index is chosen.  If the strip contains no letters then the
+        # output is (0, 0).
+        pooling = keras.layers.MaxPooling2D(
+            pool_size=(self.height,1), 
+            strides=(self.height,1), 
+            padding='same',
+            name="pooling"
+        )(val)
+
+        # nz
+        # output shape : (1, w-s+1, 2)
+        # If the vertical strip of shape hxs starting at (0, y) contains the 
+        # letter of index i > 0, then the output in positions (0, y, 0) and (0, y, 1) 
+        # is (i, 0).  If the strip contains several letters, then the one of 
+        # largest index is chosen.  If the strip contains no letters then the
+        # output is (0, 1).
+        nz = keras.layers.Dense(
+            units = 2,
+            activation='linear',
+            kernel_initializer=initializers.Constant(np.array([[1,-1],[0,1]])),
+            bias_initializer=initializers.Constant(np.array([0,1])),
+            trainable=False
+        )(pooling)
+
+        p = self.width - Letter.size + 1
+        reshape1 = keras.layers.Reshape((p, 2))(nz)
+
+        h = np.zeros((1,3*p))
+        h[0,0] = 1
+        h[0,p] = 1
+
+        v = np.zeros((2,9*p))
+        v[0,4*p:5*p] = np.ones(p)
+        v[1,0  :3*p] = np.ones(3*p)
+
+        w = np.zeros((3*p,9*p))
+        w[0  :p-1, 6*p+1:7*p] = np.eye(p-1)
+        w[0  :p-1, 7*p+1:8*p] = np.eye(p-1)
+        w[p  :2*p, 8*p  :9*p] = np.eye(p)
+        w[2*p:3*p, 8*p  :9*p] = np.eye(p)
+
+        b = np.zeros(9*p)
+        b[3*p:4*p] = np.ones(p)
+        b[5*p:6*p] = np.ones(p)
+        gru = keras.layers.GRU(
+            units=3*p, 
+            activation='linear', 
+            recurrent_activation='linear', 
+            reset_after=False,
+            kernel_initializer=initializers.Constant(v), 
+            recurrent_initializer=initializers.Constant(w), 
+            bias_initializer=initializers.Constant(b),
+            trainable=False
+        )(reshape1, initial_state=h)
+
+        chop = keras.layers.Lambda(lambda x: x[:, -p:])(gru)
+
+        super().__init__(inputs=inp, outputs=chop, **kwargs)
+
+    def read(this, text):
+        """
+        Read a text and return a string.
+        """
+        x = np.zeros((1, this.height, this.width), dtype=np.float32)
+        x[0, :text.height, :text.width] = text.image
+        y = this(x, training=False).numpy()[0]
+        s = ''
+        for i in y:
+            if i == 0:
+                return s
+            s += Letter.values[int(i)]
+        return s
 
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
 
-    conv_model.layers[2].set_weights([w1, b0])
-
-    return conv_model
-
-conv_model()
-
-np.shape(conv_model.predict(input_grid.reshape(1,6,15),verbose=0))
-conv_model.predict(input_grid.reshape(1,6,15),verbose=0)[0,:,:,0] # first channel output (i)
-conv_model.predict(input_grid.reshape(1,6,15),verbose=0)[0,:,:,3] # fourth channel output (c)
-np.shape(conv_model.layers[2].get_weights()[0]) # (3,3,1,11) can reshape to (3,3,11)
-np.shape(conv_model.layers[2].get_weights()[1]) # (11,)
-
-
-# Test the convolution model on an input word
-# p is the number of rows; the letters are scattered at random heights
-# q is the number of columns; the letters are scattered roughly evenly over the rows
-# For now fix to p=6, q=15
-def test_conv_model(p, q, word):
-    word_list = list(word)
-    n = len(word_list) 
-    if p < 3:
-        raise ValueError("p must be at least 3 to fit the word in.")
-    if q/n < 3:
-        raise ValueError("q must be at least 3*word-length to fit the word in.")
-    
-    input_grid = np.zeros([p,q])
-    for i in range(n):
-        x_pos = np.random.randint(0,p-3)
-        y_pos = np.random.randint(i*np.round(q/n), (i+1)*np.round(q/n)-3)
-        input_grid = write_letter(input_grid,word_list[i],x_pos,y_pos)
-    print(input_grid)
-
-    pred = conv_model.predict(input_grid.reshape(1,p,q),verbose=0)
-    m = np.shape(pred)[2]
-    for j in range(m):
-       print(letter_choose(pred[0,0,j,:]))
-
-test_conv_model(6, 15, "city")
-
-# then reshape to one-hot encoding and pass into rnn?
-
-
-
-
-# The example notes suggest two extensions
-# The first is keeping a running total of the counts of each letter
-# Add relu(2x) to the conv layer from above which results in one-hot encoding for the letters
-# Pass into recurrent layer with 0 bias and identity weights to simply add each input
-# into the memory
-def sum_model():
-    global sum_model
-    inputs = tf.keras.Input(shape=(6, 15))
-    reshape1 = tf.keras.layers.Reshape((6, 15, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='relu')(reshape1)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(5,3), strides=(5,3), padding='same')(convlayer)
-    reshape2 = tf.keras.layers.Reshape((5, 11))(pooling)
-    recurrent = tf.keras.layers.SimpleRNN(11, return_sequences=False, activation='relu')(reshape2)
-    sum_model = tf.keras.Model(inputs=inputs, outputs=recurrent, name="sum_model")
-    sum_model.compile(loss="categorical_crossentropy", metrics=["accuracy"])
-
-    # Convolution layer - as above
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-    
-    w1 = w0.reshape(3,3,1,11)
-
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
-
-    sum_model.layers[2].set_weights([2*w1, 2*b0]) # Add 2*
-
-    w2 = np.eye(11)
-
-    b1 = np.zeros(11)
-
-    sum_model.layers[5].set_weights([w2, w2, b1])
-
-    return sum_model
-
-sum_model()
-
-
-np.shape(sum_model.predict(input_grid.reshape(1,6,15),verbose=0))
-sum_model.predict(input_grid.reshape(1,6,15),verbose=0)[0,0] # first channel output (i)
-np.shape(sum_model.layers[5].get_weights()[0]) # (11,11)
-np.shape(sum_model.layers[5].get_weights()[1]) # (11,11)
-np.shape(sum_model.layers[5].get_weights()[2]) # (11,)
-
-
-# Make data for training the word recognition part of the model
-# using the outputs from the existing model
-def write_word(p,q,word):
-    word_list = list(word)
-    n = len(word_list) 
-    if p < 3:
-        raise ValueError("p must be at least 3 to fit the word in.")
-    if q/n < 3:
-        raise ValueError("q must be at least 3*word-length to fit the word in.")
-    
-    input_grid = np.zeros([p,q])
-
-    for i in range(n):
-        x_pos = np.random.randint(0,p-3)
-        y_pos = np.random.randint(i*np.round(q/n), (i+1)*np.round(q/n)-3)
-        input_grid = write_letter(input_grid,word_list[i],x_pos,y_pos)
-    return input_grid
-
-
-# As we fix grid shape we can do sums with dense layer
-
-# The permute layer changes the max pooling output from
-# 10 outputs with 11 channels to 11 outputs (one for each letter)
-# over 10 channels
-# The channels are then separately summed into 1 dense output each
-def pq_conv_model(p, q):
-    global pq_conv_model
-    inputs = tf.keras.Input(shape=(p, q))
-    reshape1 = tf.keras.layers.Reshape((p, q, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='relu')(reshape1)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(p-1,3), strides=(p-1,3), padding='same')(convlayer)
-    reshape2 = tf.keras.layers.Permute((1,3,2))(pooling)
-    sum = tf.keras.layers.Dense(1, activation='linear')(reshape2)
-    pq_conv_model = tf.keras.Model(inputs=inputs, outputs=sum, name='pq_conv_model')
-    pq_conv_model.compile(loss='categorical_crossentropy', metrics=['accuracy'])
-
-    # Convolution layer
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-    
-    # Turns out we can just reshape w0 from the first model
-    w1 = w0.reshape(3,3,1,11)
-
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
-
-    pq_conv_model.layers[2].set_weights([2*w1, 2*b0])
-
-    w2 = np.ones([10,1])
-
-    b1 = np.zeros(1)
-
-    pq_conv_model.layers[5].set_weights([w2, b1])
-
-
-
-
-zero_grid = np.zeros([6,30])
-input_grid = write_letter(zero_grid,"c",0,0)
-input_grid = write_letter(input_grid,"c",1,4)
-input_grid = write_letter(input_grid,"c",2,8)
-input_grid = write_letter(input_grid,"y",3,12)
-
-   
-
-pq_conv_model(p=6,q=30)
-
-np.shape(pq_conv_model.predict(input_grid.reshape(1,6,30),verbose=0)) #(1,1,q/3,1)
-#np.shape(pq_conv_model.layers[5].get_weights()[0]) # (11,1)
-#np.shape(pq_conv_model.layers[5].get_weights()[1]) # (1,)
-pq_conv_model.predict(input_grid.reshape(1,6,30),verbose=0)
-
-
-
-# can we make model using the sums and character positional encoding only?
-
-# masking means that the output rows with all 0s are ignored by the lstm layer
-
-
-# Idea:
-# Set the rnn units to the max length of the words
-# Get the ith entry of the final rnn output to be the letter coded as 1-10
-# (this is the alternative to one-hot embedding)
-# eg. "city" would be (3,1,4,2,0,0,0,0,0,0), "cit" would be (3,1,4,0,0,0,0,0,0,0)
-
-# may need LSTM or extra RNN channel to get this to work?
-# or some kind of "shifter" matrix to send say [1,0, ...] to [0,1, ...] etc
-
-
-# after this:
-# can use StringLookup layer with invert parameter to handle the mapping back to characters/words
-def gru_model(p, q):
-    global gru_model
-    grid_l = int(np.floor(q/3))
-    inputs = tf.keras.Input(shape=(p, q))
-    reshape1 = tf.keras.layers.Reshape((p, q, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='relu')(reshape1)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(p-1,3), strides=(p-1,3), padding='same')(convlayer)
-    reshape2 = tf.keras.layers.Reshape((grid_l, 11))(pooling)
-    
-    # Recurrent1 converts the convolution output to a sequence of integers
-    recurrent1 = tf.keras.layers.SimpleRNN(1, return_sequences=True, activation='linear')(reshape2)
-    
-    # Dense1 and dense2 produce I(x>0)
-    dense1 = tf.keras.layers.Dense(2, activation='relu')(recurrent1)
-    dense2 = tf.keras.layers.Dense(1, activation='linear')(dense1)
-
-    # Recurrent2 produces increments at non-zeros
-    recurrent2 = tf.keras.layers.GRU(1, activation='linear', recurrent_activation='linear', return_sequences=True)(dense2)
-    
-    # Dense2 and dense3 produce I(s=j), for j = {1,...,10}
-    dense3 = tf.keras.layers.Dense(3*grid_l, activation='relu')(recurrent2)
-    dense4 = tf.keras.layers.Dense(grid_l, activation='linear')(dense3)
-
-    # Merge dense layers and compute z using 2 layer bool
-    # problem atm is that if I(s=j)=0 and I(x<=0)=1 then z=2 so everything doubles instead of staying the same
-    # AND can be calculated as I(s=j)*I(x>0) = relu(I(s=j)+I(x>0)-1) in one dense layer
-    merge1 = tf.keras.layers.Concatenate(axis=-1)([dense2,dense4])
-    dense5 = tf.keras.layers.Dense(grid_l, activation='relu')(merge1)
-
-    # Recurrent3 returns the original sequence with the non-zeros first
-    merge2 = tf.keras.layers.Concatenate(axis=-1)([recurrent1,dense5])
-    recurrent3 = tf.keras.layers.GRU(grid_l, activation='linear', recurrent_activation='relu', return_sequences=False, reset_after=False)(merge2)
-    
-    gru_model = tf.keras.Model(inputs=inputs, outputs=recurrent3, name='gru_model')
-    gru_model.compile(loss='mean_squared_error', metrics=['accuracy'])
-
-    # Convolution layer
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-    
-    # Turns out we can just reshape w0 from the first model
-    w1 = w0.reshape(3,3,1,11)
-
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
-
-    gru_model.layers[2].set_weights([2*w1, 2*b0])
-
-    # Recurrent layer 1 converts the one-hot input to integers
-    w2 = np.arange(1,12).reshape(11,1)
-    w3 = np.zeros((1,1))
-    b1 = np.zeros(1)
-    gru_model.layers[5].set_weights([w2, w3, b1])
-
-    # Dense1
-    w4 = np.ones((1,2))
-    b2 = np.array([0,-1])
-    gru_model.layers[6].set_weights([w4, b2])
-
-    # Dense2
-    w5 = np.array([[1],[-1]])
-    b3 = np.zeros(1)
-    gru_model.layers[7].set_weights([w5, b3])
-
-    # Recurrent layer 2 increments by 1 at each unmasked value
-    w6 = np.array([[-1,0,0]]) #z_t = I(x=<0) = 1 - I(x>0)
-    w7 = np.array([[0,0,1]]) #h^t = h_t-1 + 1
-    b4 = np.array([[1,1,1],[0,0,0]]) #r_t = 1, h^t = h_t-1 + 1
-    gru_model.layers[8].set_weights([w6, w7, b4])
-
-    #dense3
-    # need 1+s-j, s-j, s-1-j
-    # have as (1+s-1, s-1, s-1-1, 1+s-2, s-2, s-1-2,...)
-    w8 = np.ones((1,3*grid_l))
-    b5 = np.repeat(-np.arange(grid_l),3)
-    b5[1::3] = -np.arange(grid_l)-1
-    b5[2::3] = -np.arange(grid_l)-2
-    gru_model.layers[9].set_weights([w8, b5])
-
-    #dense4
-    # need to calculate this before adding bias in the following GRU layer
-    w9 = np.zeros((3*grid_l,grid_l))
-    for j in range(grid_l):
-        w9[(j*3):((j+1)*3),j] = np.array([1,-2,1])
-    b6 = np.zeros(grid_l)
-    gru_model.layers[10].set_weights([w9, b6])
-
-    #dense5
-    # calculate I(s=j and x>0)
-    w10 = np.zeros((1+grid_l,grid_l))
-    w10[0,:] = np.ones(grid_l)
-    w10[1:(1+grid_l),:] = np.eye(grid_l)
-    b7 = -np.ones(grid_l)
-    gru_model.layers[12].set_weights([w10, b7])
-
-    #recurrent3
-    # layer receives:
-    # x_t
-    # I(x<=0)
-    # 10 parts for I(s=j)
-    w11 = np.zeros((1+grid_l, 3*grid_l))
-    # h_t = x_t
-    w11[0,(2*grid_l):(3*grid_l)] = np.ones(grid_l)
-    # z_t = 1 - I(s=j and x>0)
-    w11[1:(1+grid_l),0:grid_l] = -np.eye(grid_l)
-
-    w12 = np.zeros((grid_l,3*grid_l))
-
-    b8 = np.zeros(3*grid_l)
-    b8[0:grid_l] = np.ones(grid_l)
-    gru_model.layers[14].set_weights([w11, w12, b8])
-
-
-    # The GRU layer has one unit for each position
-    # Each unit is biased so that the recurrent2 input switches
-    # the forget and reset gates for a particular unmasked value
-    # layer[9]
-
-    # np.shape(lstm_model.layers[9].get_weights()[0])
-    # (2, 30) = (input shape , units x3)
-
-    # np.shape(lstm_model.layers[9].get_weights()[1])
-    # (10, 30) = (units, units x3)
-
-    # np.shape(lstm_model.layers[9].get_weights()[2])
-    # (2, 30) = (input shape , units x3)
-
-
-zero_grid = np.zeros([6,20])
-input_grid = write_letter(zero_grid,"c",0,0)
-input_grid = write_letter(input_grid,"i",1,4)
-input_grid = write_letter(input_grid,"t",2,8)
-input_grid = write_letter(input_grid,"x",3,17)
-
-   
-
-gru_model(p=6,q=20)
-
-#np.shape(lstm_model.predict(input_grid.reshape(1,6,30),verbose=0)) #(1,1,q/3,11)
-#np.shape(lstm_model.layers[5].get_weights()[0]) # (11,1)
-#np.shape(lstm_model.layers[5].get_weights()[1]) # (1,)
-gru_model.predict(input_grid.reshape(1,6,20),verbose=0)
-
-
-# from here we can convert the sequence into an integer and use a
-# string lookup layer to complete the word detection
-
-# to convert the sequence use a dense layer with 1 output and weights 11^j
-
-def make_vocab(file):
-    src_dir = os.path.dirname(os.path.realpath(__file__))
-    file_path = os.path.join(src_dir, file)
-    words_3x3 = [l.replace('\n', '').lower() for l in open(file_path, 'r').readlines()]
-    letters = ["i","y","j","c","o","l","h","t","u","x"]
-    layer1 = tf.keras.layers.StringLookup(vocabulary=letters)
-    numbers_3x3 = []
-    for word in words_3x3:
-        digits = layer1(list(word)).numpy()
-        word_sum = sum(digits*np.array([11]*len(digits))**np.arange(len(digits)))
-        numbers_3x3.append(word_sum)
-    return words_3x3, numbers_3x3
-
-#words_3x3, numbers_3x3 = make_vocab(file='..\\notes\\words_3x3.txt')
-
-def full_model(p, q):
-    global full_model
-    grid_l = int(np.floor(q/3))
-    inputs = tf.keras.Input(shape=(p, q))
-    reshape1 = tf.keras.layers.Reshape((p, q, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='relu')(reshape1)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(p-1,3), strides=(p-1,3), padding='same')(convlayer)
-    reshape2 = tf.keras.layers.Reshape((grid_l, 11))(pooling)
-    recurrent1 = tf.keras.layers.SimpleRNN(1, return_sequences=True, activation='linear')(reshape2)
-    dense1 = tf.keras.layers.Dense(2, activation='relu')(recurrent1)
-    dense2 = tf.keras.layers.Dense(1, activation='linear')(dense1)
-    recurrent2 = tf.keras.layers.GRU(1, activation='linear', recurrent_activation='linear', return_sequences=True)(dense2)
-    dense3 = tf.keras.layers.Dense(3*grid_l, activation='relu')(recurrent2)
-    dense4 = tf.keras.layers.Dense(grid_l, activation='linear')(dense3)
-    merge1 = tf.keras.layers.Concatenate(axis=-1)([dense2,dense4])
-    dense5 = tf.keras.layers.Dense(grid_l, activation='relu')(merge1)
-    merge2 = tf.keras.layers.Concatenate(axis=-1)([recurrent1,dense5])
-    recurrent3 = tf.keras.layers.GRU(grid_l, activation='linear', recurrent_activation='relu', return_sequences=False, reset_after=False)(merge2)
-
-    # Convert the GRU output to a single number and then to a word using lookup layers   
-    words_3x3, numbers_3x3 = make_vocab(file='..\\notes\\words_3x3.txt')
-    dense6 = tf.keras.layers.Dense(1, activation='linear')(recurrent3)
-    lookup1 = tf.keras.layers.IntegerLookup(vocabulary=numbers_3x3)(dense6)
-    lookup2 = tf.keras.layers.StringLookup(vocabulary=words_3x3, invert=True)(lookup1)
-
-    full_model = tf.keras.Model(inputs=inputs, outputs=lookup2, name='full_model')
-    full_model.compile(loss='mean_squared_error', metrics=['accuracy'])
-
-    # Use layers from GRU model up to recurrent3
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-    w1 = w0.reshape(3,3,1,11)
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
-    full_model.layers[2].set_weights([2*w1, 2*b0])
-
-    w2 = np.arange(1,12).reshape(11,1)
-    w3 = np.zeros((1,1))
-    b1 = np.zeros(1)
-    full_model.layers[5].set_weights([w2, w3, b1])
-
-    w4 = np.ones((1,2))
-    b2 = np.array([0,-1])
-    full_model.layers[6].set_weights([w4, b2])
-
-    w5 = np.array([[1],[-1]])
-    b3 = np.zeros(1)
-    full_model.layers[7].set_weights([w5, b3])
-
-    w6 = np.array([[-1,0,0]])
-    w7 = np.array([[0,0,1]])
-    b4 = np.array([[1,1,1],[0,0,0]])
-    full_model.layers[8].set_weights([w6, w7, b4])
-
-    w8 = np.ones((1,3*grid_l))
-    b5 = np.repeat(-np.arange(grid_l),3)
-    b5[1::3] = -np.arange(grid_l)-1
-    b5[2::3] = -np.arange(grid_l)-2
-    full_model.layers[9].set_weights([w8, b5])
-
-    w9 = np.zeros((3*grid_l,grid_l))
-    for j in range(grid_l):
-        w9[(j*3):((j+1)*3),j] = np.array([1,-2,1])
-    b6 = np.zeros(grid_l)
-    full_model.layers[10].set_weights([w9, b6])
-
-    w10 = np.zeros((1+grid_l,grid_l))
-    w10[0,:] = np.ones(grid_l)
-    w10[1:(1+grid_l),:] = np.eye(grid_l)
-    b7 = -np.ones(grid_l)
-    full_model.layers[12].set_weights([w10, b7])
-
-    w11 = np.zeros((1+grid_l, 3*grid_l))
-    w11[0,(2*grid_l):(3*grid_l)] = np.ones(grid_l)
-    w11[1:(1+grid_l),0:grid_l] = -np.eye(grid_l)
-    w12 = np.zeros((grid_l,3*grid_l))
-    b8 = np.zeros(3*grid_l)
-    b8[0:grid_l] = np.ones(grid_l)
-    full_model.layers[14].set_weights([w11, w12, b8])
-
-    w13 = np.array([11]*grid_l)**np.arange(grid_l)
-    w13 = w13.reshape(grid_l, 1)
-    b9 = np.zeros(1)
-    full_model.layers[15].set_weights([w13, b9])
-
-
-
-zero_grid = np.zeros([6,20])
-input_grid = write_letter(zero_grid,"y",0,0)
-input_grid = write_letter(input_grid,"o",1,4)
-input_grid = write_letter(input_grid,"u",2,8)
-input_grid = write_letter(input_grid,"t",0,13)
-input_grid = write_letter(input_grid,"h",3,17)
-
-
-full_model(p=6,q=20)
-
-full_model.predict(input_grid.reshape(1,6,20),verbose=0)
-
-y = full_model.predict(input_grid.reshape(1,6,20),verbose=0)
-[z.decode() for z in y.reshape(1,)]
-
-
-
-
-# Try to implement again with a grid that may contain multiple words
-def pq_conv_model(p, q, w):
-    global pq_conv_model
-    grid_p = int(np.floor(p/w))
-    grid_q = int(np.floor(q/3))
-    inputs = tf.keras.Input(shape=(p, q))
-    reshape1 = tf.keras.layers.Reshape((p, q, 1))(inputs)
-    convlayer = tf.keras.layers.Conv2D(11, [3, 3], [1, 1], padding='valid', activation='relu')(reshape1)
-    pooling = tf.keras.layers.MaxPooling2D(pool_size=(grid_p,3), strides=(grid_p,3), padding='same')(convlayer)
-    reshape2 = tf.keras.layers.Permute((1,3,2))(pooling)
-    sum = tf.keras.layers.Dense(1, activation='linear')(reshape2)
-    pq_conv_model = tf.keras.Model(inputs=inputs, outputs=sum, name='pq_conv_model')
-    pq_conv_model.compile(loss='categorical_crossentropy', metrics=['accuracy'])
-
-    # Convolution layer
-    w0 = np.array([[-1,  1, -1,  1,  1,  1,  1,  1,  1,  1, 0],
-                   [ 1, -1, -1,  1,  1, -1, -1,  1, -1, -1, 0],
-                   [-1,  1,  1,  1,  1, -1,  1,  1,  1,  1, 0],
-                   [-1, -1, -1,  1,  1,  1,  1, -1,  1, -1, 0],
-                   [ 1,  1, -1, -1, -1, -1,  1,  1, -1,  1, 0],
-                   [-1, -1,  1, -1,  1, -1,  1, -1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0],
-                   [ 1,  1,  1,  1,  1,  1, -1,  1,  1, -1, 0],
-                   [-1, -1,  1,  1,  1,  1,  1, -1,  1,  1, 0]])
-    
-    # Turns out we can just reshape w0 from the first model
-    w1 = w0.reshape(3,3,1,11)
-
-    b0 = np.array([-2.5, -3.5, -4.5, -6.5, -7.5, -4.5, -6.5, -4.5, -6.5, -4.5, 0])
-
-    pq_conv_model.layers[2].set_weights([2*w1, 2*b0])
-
-    w2 = np.ones([grid_p,1])
-
-    b1 = np.zeros(1)
-
-    pq_conv_model.layers[5].set_weights([w2, b1])
-
-
-zero_grid = np.zeros([12,18])
-input_grid = write_letter(zero_grid,"c",0,0)
-input_grid = write_letter(input_grid,"i",1,4)
-input_grid = write_letter(input_grid,"t",2,8)
-input_grid = write_letter(input_grid,"y",3,12)
-
-input_grid = write_letter(zero_grid,"j",6,0)
-input_grid = write_letter(input_grid,"u",5,4)
-input_grid = write_letter(input_grid,"l",7,8)
-input_grid = write_letter(input_grid,"y",9,12)
-
-   
-
-pq_conv_model(p=12,q=18,w=2)
-
-np.shape(pq_conv_model.predict(input_grid.reshape(1,12,18),verbose=0)) #(1,1,q/3,1)
-#np.shape(pq_conv_model.layers[5].get_weights()[0]) # (11,1)
-#np.shape(pq_conv_model.layers[5].get_weights()[1]) # (1,)
-pq_conv_model.predict(input_grid.reshape(1,12,18),verbose=0)
-
-# currently writes count for each letter per word separately
